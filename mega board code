@@ -1,0 +1,235 @@
+//Code written with the help of Claude
+
+
+#include <Servo.h>
+
+const int clockScrambleSize = 14;
+int randomNumbers[clockScrambleSize];
+String signOfScramble[clockScrambleSize];
+int absValRandomNumbers[clockScrambleSize];
+int recordedAmounts[clockScrambleSize];
+
+String moveLabels[clockScrambleSize] = {
+  "UR", "DR", "DL", "UL", "U", "R", "D", "L", "ALL",
+  "U", "R", "D", "L", "ALL"
+};
+
+String moveMotorFlags[clockScrambleSize] = {
+  "0010", "1000", "0100", "0001", "0010", "1000", "0100", "0100", "0100",
+  "0010", "0100", "0100", "1000", "0100"
+};
+
+String movePinFlags[clockScrambleSize] = {
+  "0100", "0001", "0010", "1000", "1100", "0101", "0011", "1010", "1111",
+  "0011", "0101", "1100", "1010", "0000"
+};
+
+bool pastY2 = false;
+bool hasScrambled = false;
+bool awaitingCustomScramble = false;
+
+Servo servoUL, servoUR, servoDL, servoDR;
+
+const int pinUL = 31;
+const int pinUR = 53;
+const int pinDL = 50;
+const int pinDR = 51;
+
+const int UL_UP_ANGLE = 0;
+const int UR_UP_ANGLE = 0;
+const int DL_UP_ANGLE = 0;
+const int DR_UP_ANGLE = 0;
+
+const int UL_DOWN_ANGLE = 60;
+const int UR_DOWN_ANGLE = 90;
+const int DL_DOWN_ANGLE = 57;
+const int DR_DOWN_ANGLE = 60;
+
+const int servoMoveDelay = 2000;
+
+void setup() {
+  Serial.begin(9600);
+  Serial1.begin(9600);
+  randomSeed(analogRead(A0));
+
+  servoUL.attach(pinUL);
+  servoUR.attach(pinUR);
+  servoDL.attach(pinDL);
+  servoDR.attach(pinDR);
+
+  servoUL.write(UL_DOWN_ANGLE);
+  servoUR.write(UR_DOWN_ANGLE);
+  servoDL.write(DL_DOWN_ANGLE);
+  servoDR.write(DR_DOWN_ANGLE);
+
+  Serial.println("Ready. Type 0 to scramble, 1 to solve, or 2 to enter a custom scramble.");
+}
+
+void loop() {
+  if (Serial.available() == 0) {
+    return;
+  }
+
+  String input = Serial.readStringUntil('\n');
+  input.trim();
+
+  if (awaitingCustomScramble) {
+    awaitingCustomScramble = false;
+    runCustomScramble(input);
+    return;
+  }
+
+  if (input == "0") {
+    runScramble();
+  } else if (input == "1") {
+    if (!hasScrambled) {
+      Serial.println("Nothing to solve yet - run a scramble first (type 0 or 2).");
+    } else {
+      runSolve();
+    }
+  } else if (input == "2") {
+    Serial.println("Enter the scramble string now (e.g. UR4+ DR3+ DL1+ UL3- U0+ R6+ D2+ L2- ALL4+ y2 U4+ R0+ D4- L6- ALL4+):");
+    awaitingCustomScramble = true;
+  }
+}
+
+void runScramble() {
+  Serial.println("Starting scramble.");
+
+  pastY2 = false;
+  generateScramble();
+  printScrambleForDisplay();
+
+  executeMoves();
+
+  hasScrambled = true;
+  Serial.println("Scramble complete. Type 1 to solve, or 0/2 to scramble again.");
+}
+
+void runCustomScramble(String scrambleText) {
+  Serial.println("Parsing custom scramble: " + scrambleText);
+
+  int moveIndex = 0;
+  int startPos = 0;
+  int len = scrambleText.length();
+
+  while (startPos < len && moveIndex < clockScrambleSize) {
+    int spacePos = scrambleText.indexOf(' ', startPos);
+    if (spacePos == -1) spacePos = len;
+
+    String token = scrambleText.substring(startPos, spacePos);
+    token.trim();
+    startPos = spacePos + 1;
+
+    if (token.length() == 0 || token == "y2") {
+      continue; // skip empty tokens and the y2 marker
+    }
+
+    // extract sign (last character), then digits (everything numeric in the token)
+    char lastChar = token.charAt(token.length() - 1);
+    int sign = (lastChar == '-') ? -1 : 1;
+
+    String digits = "";
+    for (int c = 0; c < token.length(); c++) {
+      if (isDigit(token.charAt(c))) {
+        digits += token.charAt(c);
+      }
+    }
+
+    if (digits.length() == 0) continue; // malformed token, skip
+
+    randomNumbers[moveIndex] = digits.toInt() * sign;
+    moveIndex++;
+  }
+
+  if (moveIndex != clockScrambleSize) {
+    Serial.println("Warning: expected " + String(clockScrambleSize) + " moves, parsed " + String(moveIndex) + ". Proceeding anyway.");
+  }
+
+  Serial.println("Starting custom scramble.");
+  pastY2 = false;
+  executeMoves();
+
+  hasScrambled = true;
+  Serial.println("Custom scramble complete. Type 1 to solve, or 0/2 to scramble again.");
+}
+
+void executeMoves() {
+  for (int i = 0; i < clockScrambleSize; i++) {
+    if (i == 9) {
+      pastY2 = true;
+    }
+
+    setPinsForMove(movePinFlags[i]);
+
+    int amount = randomNumbers[i] * (pastY2 ? -1 : 1);
+    recordedAmounts[i] = amount;
+
+    sendMoveCommand(i, moveMotorFlags[i], amount);
+  }
+}
+
+void runSolve() {
+  Serial.println("Starting solve (reverse of last scramble).");
+
+  for (int i = clockScrambleSize - 1; i >= 0; i--) {
+    setPinsForMove(movePinFlags[i]);
+
+    int reversedAmount = -recordedAmounts[i];
+
+    sendMoveCommand(i, moveMotorFlags[i], reversedAmount);
+  }
+
+  Serial.println("Solve complete. Type 0 or 2 to scramble again.");
+}
+
+void sendMoveCommand(int index, String motorFlags, int amount) {
+  String command = motorFlags + "," + String(amount);
+
+  Serial.println("Sending move " + String(index) + ": " + moveLabels[index] +
+                  " motorFlags=" + motorFlags + " amount=" + String(amount));
+  Serial1.println(command);
+
+  delay(5000);
+
+  String response = "";
+  if (Serial1.available()) {
+    response = Serial1.readStringUntil('\n');
+    response.trim();
+  }
+  Serial.println("Received: " + response);
+
+  delay(1000);
+}
+
+void setPinsForMove(String pinFlags) {
+  servoUL.write(UL_DOWN_ANGLE); delay(servoMoveDelay);
+  servoUR.write(UR_DOWN_ANGLE); delay(servoMoveDelay);
+  servoDL.write(DL_DOWN_ANGLE); delay(servoMoveDelay);
+  servoDR.write(DR_DOWN_ANGLE); delay(servoMoveDelay);
+
+  if (pinFlags.charAt(0) == '1') { servoUL.write(UL_UP_ANGLE); delay(servoMoveDelay); }
+  if (pinFlags.charAt(1) == '1') { servoUR.write(UR_UP_ANGLE); delay(servoMoveDelay); }
+  if (pinFlags.charAt(2) == '1') { servoDL.write(DL_UP_ANGLE); delay(servoMoveDelay); }
+  if (pinFlags.charAt(3) == '1') { servoDR.write(DR_UP_ANGLE); delay(servoMoveDelay); }
+}
+
+void generateScramble() {
+  for (int i = 0; i < clockScrambleSize; i++) {
+    randomNumbers[i] = random(-6, 7);
+    signOfScramble[i] = (randomNumbers[i] >= 0) ? "+" : "-";
+    absValRandomNumbers[i] = abs(randomNumbers[i]);
+  }
+}
+
+void printScrambleForDisplay() {
+  String result = "";
+  for (int i = 0; i < clockScrambleSize; i++) {
+    result += moveLabels[i];
+    result += absValRandomNumbers[i];
+    result += signOfScramble[i];
+    result += " ";
+    if (i == 8) result += "y2 ";
+  }
+  Serial.println("Full scramble: " + result);
+}
