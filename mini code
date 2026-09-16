@@ -1,0 +1,84 @@
+//This code was written with the help of Claude
+
+const int stepX = 2;
+const int dirX = 5;
+const int stepY = 3;
+const int dirY = 6;
+const int stepZ = 4;
+const int dirZ = 7;
+const int stepA = 12;
+const int dirA = 13;
+const int enPin = 8;
+
+const int value = 1600;
+const int msDelay = 500;
+const int backlashSteps = 0;
+const int singleClickExtra = 0;
+
+void setup() {
+  pinMode(stepX, OUTPUT); pinMode(dirX, OUTPUT);
+  pinMode(stepY, OUTPUT); pinMode(dirY, OUTPUT);
+  pinMode(stepZ, OUTPUT); pinMode(dirZ, OUTPUT);
+  pinMode(stepA, OUTPUT); pinMode(dirA, OUTPUT);
+  pinMode(enPin, OUTPUT);
+  Serial.begin(9600);
+}
+
+void turnAllSteps(int totalSteps, int targetDelay, bool moveX, bool moveY, bool moveZ, bool moveA) {
+  int rampSteps = min(100, totalSteps);
+  for (int s = 0; s < totalSteps; s++) {
+    int currentDelay = targetDelay;
+    if (s < rampSteps) {
+      currentDelay = map(s, 0, rampSteps, targetDelay * 3, targetDelay);
+    }
+    if (moveX) digitalWrite(stepX, HIGH);
+    if (moveY) digitalWrite(stepY, HIGH);
+    if (moveZ) digitalWrite(stepZ, HIGH);
+    if (moveA) digitalWrite(stepA, HIGH);
+    delayMicroseconds(currentDelay);
+    if (moveX) digitalWrite(stepX, LOW);
+    if (moveY) digitalWrite(stepY, LOW);
+    if (moveZ) digitalWrite(stepZ, LOW);
+    if (moveA) digitalWrite(stepA, LOW);
+    delayMicroseconds(currentDelay);
+  }
+}
+
+void turnClicks(int clicks, bool moveX, bool moveY, bool moveZ, bool moveA) {
+  if (clicks == 0) return;
+
+  bool direction = (clicks > 0) ? LOW : HIGH;
+
+  if (moveX) digitalWrite(dirX, direction);
+  if (moveY) digitalWrite(dirY, direction);
+  if (moveZ) digitalWrite(dirZ, direction);
+  if (moveA) digitalWrite(dirA, !direction); // inverted specifically for motor A (UL)
+
+  int amount = abs(clicks);
+  int steps = value * amount + backlashSteps;
+  if (amount == 1) steps += singleClickExtra;
+
+  digitalWrite(enPin, LOW);
+  turnAllSteps(steps, msDelay, moveX, moveY, moveZ, moveA);
+  digitalWrite(enPin, HIGH);
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    String msg = Serial.readStringUntil('\n');
+    msg.trim();
+
+    int commaIndex = msg.indexOf(',');
+    String flags = msg.substring(0, commaIndex);
+    int amount = msg.substring(commaIndex + 1).toInt();
+
+    bool moveX = flags.charAt(0) == '1';
+    bool moveY = flags.charAt(1) == '1';
+    bool moveZ = flags.charAt(2) == '1';
+    bool moveA = flags.charAt(3) == '1';
+
+    turnClicks(amount, moveX, moveY, moveZ, moveA);
+
+    Serial.println("DONE");
+  }
+}
